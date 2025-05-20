@@ -237,15 +237,27 @@ class TechnicalAnalysis:
         Returns:
             dict: Dictionary of cross-dataset correlations with lag information
         """
-        if not negative_streaks or not secondary_datasets:
+        st.write("### Cross-Dataset Correlation Analysis Debug Information")
+        
+        if not negative_streaks:
+            st.warning("No negative streaks provided for analysis.")
             return {}
             
+        if not secondary_datasets:
+            st.warning("No secondary datasets selected for analysis.")
+            return {}
+        
         # Get the primary dataset
         primary_df = datasets_dict.get(primary_dataset)
         if primary_df is None:
             st.error(f"Primary dataset {primary_dataset} not found.")
             return {}
             
+        # Display primary dataset info for debugging
+        st.write(f"Primary dataset: {primary_dataset}")
+        st.write(f"Primary dataset shape: {primary_df.shape}")
+        st.write(f"Primary dataset date range: {primary_df.index.min()} to {primary_df.index.max()}")
+        
         # Find BTC price column in primary dataset
         btc_price_col = None
         for col in primary_df.columns:
@@ -268,37 +280,28 @@ class TechnicalAnalysis:
         if btc_price_col is None:
             st.error("No suitable price column found in primary dataset.")
             return {}
+            
+        st.write(f"Using price column: {btc_price_col}")
         
-        # Create a mask for the negative streak periods
+        # Display negative streak information for debugging
+        st.write("### Negative Streak Information")
+        for i, streak in enumerate(negative_streaks):
+            st.write(f"Streak #{i+1}: {streak[0]} to {streak[-1]} ({len(streak)} days)")
+        
+        # Create a simple boolean Series to track streak periods
+        # Initialize with all False values and length of primary dataset
         streak_mask = pd.Series(False, index=primary_df.index)
         
-        for streak in negative_streaks:
-            streak_start = streak[0]
-            streak_end = streak[-1]
-            
-            # Handle case where streak dates might not be in the primary dataset index
-            # Find the closest dates in the primary dataset's index
-            try:
-                # Convert dates to compatible format if needed
-                if not isinstance(streak_start, pd.Timestamp):
-                    streak_start = pd.Timestamp(streak_start)
-                if not isinstance(streak_end, pd.Timestamp):
-                    streak_end = pd.Timestamp(streak_end)
+        # Simpler approach: explicitly loop through each primary index date
+        # and mark it as True if it falls within any streak
+        for idx in primary_df.index:
+            for streak in negative_streaks:
+                streak_start = pd.Timestamp(streak[0]) if not isinstance(streak[0], pd.Timestamp) else streak[0]
+                streak_end = pd.Timestamp(streak[-1]) if not isinstance(streak[-1], pd.Timestamp) else streak[-1]
                 
-                # Find valid dates in the primary dataset index
-                # Convert primary index to series first to avoid numpy array comparison issues
-                primary_index_series = pd.Series(primary_df.index)
-                valid_dates_mask = (primary_index_series >= streak_start) & (primary_index_series <= streak_end)
-                valid_dates = primary_df.index[valid_dates_mask]
-                
-                if len(valid_dates) > 0:
-                    streak_mask.loc[valid_dates[0]:valid_dates[-1]] = True
-                else:
-                    st.warning(f"No overlapping dates found for streak {streak_start} to {streak_end}")
-                    
-            except Exception as e:
-                st.warning(f"Error setting streak mask for dates {streak_start} to {streak_end}: {str(e)}")
-                continue
+                if idx >= streak_start and idx <= streak_end:
+                    streak_mask.loc[idx] = True
+                    break  # Break once we've found a match
             
         # Check for streak mask coverage
         if streak_mask.sum() == 0:
