@@ -223,3 +223,212 @@ class TechnicalAnalysis:
         }
         
         return sorted_correlations
+        
+    def analyze_cross_dataset_correlations(self, primary_dataset, secondary_datasets, datasets_dict, negative_streaks, max_lag_periods=5):
+        """Analyze correlations between datasets, especially related to negative BTC price streaks.
+        
+        Args:
+            primary_dataset (str): Name of the primary dataset (usually Bitcoin)
+            secondary_datasets (list): Names of secondary datasets to correlate with
+            datasets_dict (dict): Dictionary of datasets by name
+            negative_streaks (list): List of negative BTC price streak date ranges
+            max_lag_periods (int): Maximum lag periods to consider for correlation
+            
+        Returns:
+            dict: Dictionary of cross-dataset correlations with lag information
+        """
+        if not negative_streaks or not secondary_datasets:
+            return {}
+            
+        # Get the primary dataset
+        primary_df = datasets_dict.get(primary_dataset)
+        if primary_df is None:
+            st.error(f"Primary dataset {primary_dataset} not found.")
+            return {}
+            
+        # Find BTC price column in primary dataset
+        btc_price_col = None
+        for col in primary_df.columns:
+            if any(term in col.lower() for term in ['btc', 'bitcoin']) and any(term in col.lower() for term in ['close', 'price']):
+                btc_price_col = col
+                break
+                
+        if btc_price_col is None:
+            st.warning(f"Could not find Bitcoin price column in primary dataset {primary_dataset}.")
+            if 'BTC_Close' in primary_df.columns:
+                btc_price_col = 'BTC_Close'
+            else:
+                # Use the first numeric column as a fallback
+                for col in primary_df.columns:
+                    if pd.api.types.is_numeric_dtype(primary_df[col]):
+                        btc_price_col = col
+                        st.info(f"Using {col} as the primary price column.")
+                        break
+                        
+        if btc_price_col is None:
+            st.error("No suitable price column found in primary dataset.")
+            return {}
+        
+        # Create a mask for the negative streak periods
+        streak_mask = pd.Series(False, index=primary_df.index)
+        
+        for streak in negative_streaks:
+            streak_start = streak[0]
+            streak_end = streak[-1]
+            streak_mask.loc[streak_start:streak_end] = True
+            
+        # Check for streak mask coverage
+        if streak_mask.sum() == 0:
+            st.warning("No negative streaks found in the time range of the primary dataset.")
+            return {}
+            
+        cross_correlations = {}
+        
+        # Analyze each secondary dataset
+        for sec_dataset_name in secondary_datasets:
+            sec_df = datasets_dict.get(sec_dataset_name)
+            
+            if sec_df is None:
+                st.warning(f"Secondary dataset {sec_dataset_name} not found.")
+                continue
+                
+            # Find potential indicator columns in secondary dataset
+            numeric_cols = [col for col in sec_df.columns 
+                         if pd.api.types.is_numeric_dtype(sec_df[col]) and 
+                         col not in ['record_name']]
+                         
+            if not numeric_cols:
+                st.warning(f"No numeric columns found in secondary dataset {sec_dataset_name}.")
+                continue
+                
+            # Test different lag periods for each column
+            best_correlation = 0
+            best_lag = 0
+            best_column = None
+            
+            for col in numeric_cols:
+                for lag in range(max_lag_periods + 1):
+                    # Create lagged dataset
+                    lagged_df = self.create_lagged_dataset(primary_df, sec_df, col, lag)
+                    
+                    if lagged_df is None or lagged_df.empty:
+                        continue
+                        
+                    # Skip if not enough overlap
+                    if len(lagged_df) < 10:  # Require at least 10 data points
+                        continue
+                        
+                    # Find the lagged column name
+                    lagged_col = f"{sec_dataset_name}_{col}_lag{lag}"
+                    
+                    if lagged_col not in lagged_df.columns or btc_price_col not in lagged_df.columns:
+                        continue
+                        
+                    # Calculate correlation with price and streaks
+                    try:
+                        # Point correlation with price
+                        price_corr = lagged_df[lagged_col].corr(lagged_df[btc_price_col])
+                        
+                        # Create streak mask for the lagged dataset
+                        lagged_streak_mask = streak_mask.reindex(lagged_df.index).fillna(False)
+                        
+                        # Calculate mean values for streak and non-streak periods
+                        streak_mean = lagged_df.loc[lagged_streak_mask, lagged_col].mean()
+                        non_streak_mean = lagged_df.loc[~lagged_streak_mask, lagged_col].mean()
+                        
+                        # Calculate streak correlation (difference in means)
+                        if not pd.isna(streak_mean) and not pd.isna(non_streak_mean):
+                            streak_diff = abs(streak_mean - non_streak_mean)
+                            overall_std = lagged_df[lagged_col].std()
+                            
+                            if overall_std > 0:
+                                streak_corr = streak_diff / overall_std
+                            else:
+                                streak_corr = 0
+                        else:
+                            streak_corr = 0
+                            
+                        # Combine price correlation and streak correlation
+                        combined_corr = (abs(price_corr) + streak_corr) / 2
+                        
+                        if combined_corr > best_correlation:
+                            best_correlation = combined_corr
+                            best_lag = lag
+                            best_column = col
+                    except Exception as e:
+                        st.error(f"Error calculating correlation for {sec_dataset_name}, {col}, lag {lag}: {str(e)}")
+                        continue
+            
+            if best_column is not None:
+                cross_correlations[sec_dataset_name] = (best_lag, best_correlation, best_column)
+                
+        # Sort by correlation strength
+        sorted_cross_correlations = {
+            k: v for k, v in sorted(cross_correlations.items(), key=lambda item: item[1][1], reverse=True)
+        }
+        
+        return sorted_cross_correlations
+        
+    def create_lagged_dataset(self, primary_df, secondary_df, column, lag_periods):
+        """Create a dataset with a lagged column from the secondary dataset.
+        
+        Args:
+            primary_df (pd.DataFrame): Primary dataset
+            secondary_df (pd.DataFrame): Secondary dataset
+            column (str): Column from secondary dataset to lag
+            lag_periods (int): Number of periods to lag
+            
+        Returns:
+            pd.DataFrame: Combined dataset with lagged column
+        """
+        try:
+            # Make copies to avoid modifying originals
+            primary_copy = primary_df.copy()
+            secondary_copy = secondary_df.copy()
+            
+            # Ensure both dataframes have datetime indices
+            if not isinstance(primary_copy.index, pd.DatetimeIndex):
+                date_cols = [col for col in primary_copy.columns if 'date' in col.lower()]
+                if date_cols:
+                    primary_copy = primary_copy.set_index(date_cols[0])
+                    primary_copy.index = pd.to_datetime(primary_copy.index)
+                else:
+                    st.warning("No date column found in primary dataset for creating lagged dataset.")
+                    return None
+                    
+            if not isinstance(secondary_copy.index, pd.DatetimeIndex):
+                date_cols = [col for col in secondary_copy.columns if 'date' in col.lower()]
+                if date_cols:
+                    secondary_copy = secondary_copy.set_index(date_cols[0])
+                    secondary_copy.index = pd.to_datetime(secondary_copy.index)
+                else:
+                    st.warning("No date column found in secondary dataset for creating lagged dataset.")
+                    return None
+            
+            # Check if the column exists
+            if column not in secondary_copy.columns:
+                st.warning(f"Column {column} not found in secondary dataset.")
+                return None
+                
+            # Create a lagged version of the column
+            secondary_name = secondary_copy['record_name'].iloc[0] if 'record_name' in secondary_copy.columns else "secondary"
+            lagged_col_name = f"{secondary_name}_{column}_lag{lag_periods}"
+            
+            # Create a Series with the lagged values
+            lagged_series = secondary_copy[column].shift(-lag_periods)
+            
+            # Create a new dataframe with just the index and lagged column
+            lagged_df = pd.DataFrame(lagged_series).rename(columns={column: lagged_col_name})
+            
+            # Merge with primary dataframe on index
+            result_df = pd.merge(primary_copy, lagged_df, how='inner', left_index=True, right_index=True)
+            
+            # Check if there's enough data after merging
+            if len(result_df) < 10:  # Require at least 10 data points
+                return None
+                
+            return result_df
+            
+        except Exception as e:
+            st.error(f"Error creating lagged dataset: {str(e)}")
+            return None

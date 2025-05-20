@@ -153,41 +153,144 @@ elif operation == "Analyze Indicators":
     df = st.session_state['df']
     negative_streaks = st.session_state['negative_streaks']
     
-    with st.spinner("Calculating technical indicators..."):
-        # Calculate technical indicators
-        df_with_indicators = technical_analysis.calculate_indicators(df)
-        st.session_state['df_with_indicators'] = df_with_indicators
+    # Show analysis options
+    st.subheader("Analysis Options")
+    analysis_type = st.radio(
+        "Select Analysis Type",
+        ["Technical Indicators", "Cross-Dataset Correlations", "Combined Analysis"]
+    )
+    
+    if analysis_type == "Technical Indicators" or analysis_type == "Combined Analysis":
+        with st.spinner("Calculating technical indicators..."):
+            # Calculate technical indicators
+            df_with_indicators = technical_analysis.calculate_indicators(df)
+            st.session_state['df_with_indicators'] = df_with_indicators
+            
+            # Analyze which indicators correlate with negative streaks
+            indicator_correlations = technical_analysis.analyze_indicator_correlations(
+                df_with_indicators, negative_streaks
+            )
+            st.session_state['indicator_correlations'] = indicator_correlations
+            
+            if indicator_correlations:
+                st.success("Technical indicator analysis completed!")
+                
+                # Display correlation results
+                st.subheader("Technical Indicator Correlations with Negative Streaks")
+                
+                # Convert to DataFrame for better display
+                correlation_df = pd.DataFrame({
+                    'Indicator': list(indicator_correlations.keys()),
+                    'Correlation Score': [score for score, _ in indicator_correlations.values()],
+                    'Appearance Rate': [rate for _, rate in indicator_correlations.values()]
+                }).sort_values('Correlation Score', ascending=False)
+                
+                st.dataframe(correlation_df)
+                
+                # Visualize top indicators
+                st.subheader("Top Technical Indicators Visualization")
+                top_indicators = correlation_df.head(5)['Indicator'].tolist()
+                
+                for indicator in top_indicators:
+                    st.write(f"### {indicator}")
+                    visualizer.plot_indicator_vs_price(df_with_indicators, 'BTC_Close', indicator)
+            else:
+                st.info("No significant technical indicator correlations found.")
+    
+    if analysis_type == "Cross-Dataset Correlations" or analysis_type == "Combined Analysis":
+        st.subheader("Cross-Dataset Correlation Analysis")
         
-        # Analyze which indicators correlate with negative streaks
-        indicator_correlations = technical_analysis.analyze_indicator_correlations(
-            df_with_indicators, negative_streaks
-        )
-        st.session_state['indicator_correlations'] = indicator_correlations
+        if 'datasets_by_name' not in st.session_state:
+            st.warning("No multiple datasets available for cross-correlation analysis.")
+            st.stop()
+            
+        datasets = st.session_state['datasets_by_name']
         
-        if indicator_correlations:
-            st.success("Analysis completed!")
+        # List available datasets for correlation
+        dataset_names = list(datasets.keys())
+        
+        if len(dataset_names) <= 1:
+            st.warning("At least two datasets are required for cross-correlation analysis.")
+            st.stop()
             
-            # Display correlation results
-            st.subheader("Indicator Correlations with Negative Streaks")
-            
-            # Convert to DataFrame for better display
-            correlation_df = pd.DataFrame({
-                'Indicator': list(indicator_correlations.keys()),
-                'Correlation Score': [score for score, _ in indicator_correlations.values()],
-                'Appearance Rate': [rate for _, rate in indicator_correlations.values()]
-            }).sort_values('Correlation Score', ascending=False)
-            
-            st.dataframe(correlation_df)
-            
-            # Visualize top indicators
-            st.subheader("Top Indicators Visualization")
-            top_indicators = correlation_df.head(5)['Indicator'].tolist()
-            
-            for indicator in top_indicators:
-                st.write(f"### {indicator}")
-                visualizer.plot_indicator_vs_price(df_with_indicators, 'BTC_Close', indicator)
+        # Primary dataset (likely Bitcoin)
+        primary_datasets = [name for name in dataset_names if 'btc' in name.lower() or 'bitcoin' in name.lower()]
+        if primary_datasets:
+            primary_dataset = st.selectbox("Select Primary Dataset (Bitcoin)", primary_datasets)
         else:
-            st.info("No significant correlations found.")
+            primary_dataset = st.selectbox("Select Primary Dataset", dataset_names)
+            
+        # Secondary datasets to correlate with
+        other_datasets = [name for name in dataset_names if name != primary_dataset]
+        selected_datasets = st.multiselect(
+            "Select Secondary Datasets to Correlate With", 
+            other_datasets,
+            default=other_datasets[:2] if len(other_datasets) >= 2 else other_datasets
+        )
+        
+        if not selected_datasets:
+            st.warning("Please select at least one secondary dataset for correlation analysis.")
+            st.stop()
+            
+        # Configure lag periods for cross-correlation
+        lag_periods = st.slider("Maximum Lag Period (Days)", 0, 30, 5)
+        
+        if st.button("Run Cross-Dataset Correlation Analysis"):
+            with st.spinner("Analyzing cross-dataset correlations..."):
+                # Perform cross-correlation analysis
+                cross_correlations = technical_analysis.analyze_cross_dataset_correlations(
+                    primary_dataset, selected_datasets, datasets, negative_streaks, lag_periods
+                )
+                
+                if cross_correlations:
+                    st.success("Cross-dataset correlation analysis completed!")
+                    
+                    # Display correlation results
+                    st.subheader("Cross-Dataset Correlations with Negative Streaks")
+                    
+                    # Convert to DataFrame for better display
+                    cross_corr_df = pd.DataFrame({
+                        'Dataset': list(cross_correlations.keys()),
+                        'Best Lag': [lag for lag, _, _ in cross_correlations.values()],
+                        'Correlation Score': [score for _, score, _ in cross_correlations.values()],
+                        'Indicator Column': [col for _, _, col in cross_correlations.values()]
+                    }).sort_values('Correlation Score', ascending=False)
+                    
+                    st.dataframe(cross_corr_df)
+                    
+                    # Visualize top cross-correlations
+                    if not cross_corr_df.empty:
+                        st.subheader("Top Cross-Dataset Correlations Visualization")
+                        for i, row in cross_corr_df.head(3).iterrows():
+                            dataset = row['Dataset']
+                            lag = row['Best Lag']
+                            indicator_col = row['Indicator Column']
+                            
+                            st.write(f"### {dataset} ({indicator_col}, Lag: {lag} days)")
+                            
+                            # Plot the lagged correlation
+                            lagged_df = technical_analysis.create_lagged_dataset(
+                                datasets[primary_dataset], 
+                                datasets[dataset], 
+                                indicator_col, 
+                                lag
+                            )
+                            
+                            if lagged_df is not None and not lagged_df.empty:
+                                # Find the BTC price column
+                                btc_cols = [col for col in lagged_df.columns if 'btc_close' in col.lower()]
+                                if btc_cols:
+                                    visualizer.plot_indicator_vs_price(
+                                        lagged_df, 
+                                        btc_cols[0], 
+                                        f"{dataset}_{indicator_col}_lag{lag}"
+                                    )
+                                else:
+                                    st.warning(f"Could not find BTC price column in lagged dataset.")
+                            else:
+                                st.warning(f"Could not create lagged dataset for visualization.")
+                else:
+                    st.info("No significant cross-dataset correlations found.")
 
 elif operation == "Backtest Indicators":
     st.header("Backtest Promising Indicators")

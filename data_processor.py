@@ -19,6 +19,7 @@ class DataProcessor:
             pd.DataFrame: DataFrame containing the processed data
         """
         all_data = []
+        datasets_by_name = {}
         
         # Progress bar for processing records
         progress_bar = st.progress(0)
@@ -49,8 +50,13 @@ class DataProcessor:
                     # Add record name as a reference
                     excel_data['record_name'] = record_name
                     
+                    # Store dataset by name for potential correlation analysis
+                    datasets_by_name[record_name] = excel_data
+                    
                     # Add the data to our collection
                     all_data.append(excel_data)
+                    
+                    st.success(f"Successfully processed data for: {record_name}")
                 else:
                     st.warning(f"Could not extract data from attachment for record: {record_name}")
             
@@ -63,6 +69,18 @@ class DataProcessor:
         if not all_data:
             st.error("No data could be extracted from any attachments.")
             return None
+        
+        # Store datasets by name in session state for later correlation analysis
+        st.session_state['datasets_by_name'] = datasets_by_name
+        
+        # Show available datasets
+        st.subheader("Available Datasets")
+        st.write(f"Found {len(datasets_by_name)} datasets: {', '.join(datasets_by_name.keys())}")
+        
+        # Check if Bitcoin data is present
+        btc_datasets = [name for name in datasets_by_name.keys() if 'btc' in name.lower() or 'bitcoin' in name.lower()]
+        if btc_datasets:
+            st.write(f"Primary Bitcoin dataset: {btc_datasets[0]}")
         
         # Combine all data
         combined_data = pd.concat(all_data, ignore_index=True)
