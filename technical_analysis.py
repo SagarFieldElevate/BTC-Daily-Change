@@ -275,7 +275,28 @@ class TechnicalAnalysis:
         for streak in negative_streaks:
             streak_start = streak[0]
             streak_end = streak[-1]
-            streak_mask.loc[streak_start:streak_end] = True
+            
+            # Handle case where streak dates might not be in the primary dataset index
+            # Find the closest dates in the primary dataset's index
+            try:
+                # Convert dates to compatible format if needed
+                if not isinstance(streak_start, pd.Timestamp):
+                    streak_start = pd.Timestamp(streak_start)
+                if not isinstance(streak_end, pd.Timestamp):
+                    streak_end = pd.Timestamp(streak_end)
+                
+                # Find valid dates in the primary dataset index
+                valid_dates = primary_df.index[(primary_df.index >= streak_start) & 
+                                              (primary_df.index <= streak_end)]
+                
+                if len(valid_dates) > 0:
+                    streak_mask.loc[valid_dates[0]:valid_dates[-1]] = True
+                else:
+                    st.warning(f"No overlapping dates found for streak {streak_start} to {streak_end}")
+                    
+            except Exception as e:
+                st.warning(f"Error setting streak mask for dates {streak_start} to {streak_end}: {str(e)}")
+                continue
             
         # Check for streak mask coverage
         if streak_mask.sum() == 0:
