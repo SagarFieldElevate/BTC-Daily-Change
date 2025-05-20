@@ -292,16 +292,39 @@ class TechnicalAnalysis:
         # Initialize with all False values and length of primary dataset
         streak_mask = pd.Series(False, index=primary_df.index)
         
-        # Simpler approach: explicitly loop through each primary index date
-        # and mark it as True if it falls within any streak
-        for idx in primary_df.index:
-            for streak in negative_streaks:
-                streak_start = pd.Timestamp(streak[0]) if not isinstance(streak[0], pd.Timestamp) else streak[0]
-                streak_end = pd.Timestamp(streak[-1]) if not isinstance(streak[-1], pd.Timestamp) else streak[-1]
-                
-                if idx >= streak_start and idx <= streak_end:
-                    streak_mask.loc[idx] = True
-                    break  # Break once we've found a match
+        # Simpler approach: loop through each streak and create a boolean mask
+        st.write("Finding streak matches in dataset...")
+        
+        for streak in negative_streaks:
+            streak_start = pd.Timestamp(streak[0]) if not isinstance(streak[0], pd.Timestamp) else streak[0]
+            streak_end = pd.Timestamp(streak[-1]) if not isinstance(streak[-1], pd.Timestamp) else streak[-1]
+            
+            # Print the streak dates for debugging
+            st.write(f"Looking for overlap with streak: {streak_start} to {streak_end}")
+            
+            # Convert primary index to strings for comparison if needed
+            if not isinstance(primary_df.index, pd.DatetimeIndex):
+                st.warning("Primary index is not a DatetimeIndex. Attempting conversion...")
+                try:
+                    # Try to convert index to datetime
+                    primary_df.index = pd.to_datetime(primary_df.index)
+                except:
+                    st.error("Could not convert primary index to datetime. Using string comparison.")
+                    # If we can't convert, we'll print the index info and skip
+                    st.write(f"Index type: {type(primary_df.index)}")
+                    st.write(f"Sample index values: {list(primary_df.index[:5])}")
+                    continue
+                    
+            # Create mask for this streak
+            streak_date_mask = (primary_df.index >= streak_start) & (primary_df.index <= streak_end)
+            matching_dates = primary_df.index[streak_date_mask]
+            
+            if len(matching_dates) > 0:
+                st.success(f"Found {len(matching_dates)} matching dates in dataset")
+                streak_mask.loc[matching_dates] = True
+            else:
+                st.warning(f"No overlapping dates found for streak {streak_start} to {streak_end}")
+                st.write(f"Dataset date range: {primary_df.index.min()} to {primary_df.index.max()}")
             
         # Check for streak mask coverage
         if streak_mask.sum() == 0:
