@@ -178,6 +178,11 @@ class TechnicalAnalysis:
             # Skip columns with too many NaN values
             if df_indicators[indicator].isna().sum() > len(df_indicators) * 0.3:
                 continue
+                
+            # Check if the column is numeric
+            if not pd.api.types.is_numeric_dtype(df_indicators[indicator]):
+                st.warning(f"Skipping non-numeric column: {indicator}")
+                continue
             
             # Fill NaN values with the median for correlation calculation
             filled_indicator = df_indicators[indicator].fillna(df_indicators[indicator].median())
