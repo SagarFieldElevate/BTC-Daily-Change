@@ -286,8 +286,10 @@ class TechnicalAnalysis:
                     streak_end = pd.Timestamp(streak_end)
                 
                 # Find valid dates in the primary dataset index
-                valid_dates = primary_df.index[(primary_df.index >= streak_start) & 
-                                              (primary_df.index <= streak_end)]
+                # Convert primary index to series first to avoid numpy array comparison issues
+                primary_index_series = pd.Series(primary_df.index)
+                valid_dates_mask = (primary_index_series >= streak_start) & (primary_index_series <= streak_end)
+                valid_dates = primary_df.index[valid_dates_mask]
                 
                 if len(valid_dates) > 0:
                     streak_mask.loc[valid_dates[0]:valid_dates[-1]] = True
@@ -440,6 +442,10 @@ class TechnicalAnalysis:
             
             # Create a new dataframe with just the index and lagged column
             lagged_df = pd.DataFrame(lagged_series).rename(columns={column: lagged_col_name})
+            
+            # Ensure both indexes are in datetime format
+            lagged_df.index = pd.to_datetime(lagged_df.index)
+            primary_copy.index = pd.to_datetime(primary_copy.index)
             
             # Merge with primary dataframe on index
             result_df = pd.merge(primary_copy, lagged_df, how='inner', left_index=True, right_index=True)
