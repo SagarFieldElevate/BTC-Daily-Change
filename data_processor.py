@@ -110,7 +110,28 @@ class DataProcessor:
                 date_col = date_columns[0]
                 
                 # Ensure date column is datetime
-                processed_df[date_col] = pd.to_datetime(processed_df[date_col], errors='coerce')
+                try:
+                    # Try different datetime formats
+                    processed_df[date_col] = pd.to_datetime(processed_df[date_col], errors='coerce')
+                    
+                    # Check if we have invalid dates (NaT) or dates all in epoch time (1970)
+                    if processed_df[date_col].isna().sum() > len(processed_df) * 0.5 or (
+                        processed_df[date_col].min().year < 2000 and processed_df[date_col].max().year < 2000):
+                        # Try explicit format - common formats for financial data
+                        formats = ['%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y', '%d-%m-%Y']
+                        for fmt in formats:
+                            try:
+                                processed_df[date_col] = pd.to_datetime(processed_df[date_col], format=fmt, errors='coerce')
+                                if processed_df[date_col].isna().sum() < len(processed_df) * 0.5:
+                                    st.success(f"Successfully parsed dates using format: {fmt}")
+                                    break
+                            except:
+                                continue
+                except Exception as e:
+                    st.error(f"Error parsing dates: {str(e)}")
+                
+                # Print date range for debugging
+                st.write(f"Data date range: {processed_df[date_col].min()} to {processed_df[date_col].max()}")
                 
                 # Drop rows with invalid dates
                 processed_df = processed_df.dropna(subset=[date_col])
@@ -120,6 +141,9 @@ class DataProcessor:
                 
                 # Sort by date
                 processed_df = processed_df.sort_index()
+                
+                # Print final date range after processing
+                st.write(f"Final date range: {processed_df.index.min()} to {processed_df.index.max()}")
             
             # Look for Bitcoin price columns
             btc_price_cols = [
