@@ -7,6 +7,8 @@ from data_processor import DataProcessor
 from technical_analysis import TechnicalAnalysis
 from backtest import Backtester
 from visualizations import Visualizer
+from registry import StreamRegistry
+from connectors.airtable_connector import AirtableConnector
 
 # Page configuration
 st.set_page_config(
@@ -27,22 +29,23 @@ and discovers correlated indicators for backtesting.
 def initialize_services():
     airtable_api_key = os.getenv("AIRTABLE_API_KEY", "")
     airtable_base_id = os.getenv("AIRTABLE_BASE_ID", "")
-    
+
     if not airtable_api_key or not airtable_base_id:
         st.error("Airtable API key or Base ID not found in environment variables.")
-        return None, None, None, None
-    
-    airtable_service = AirtableService(airtable_api_key, airtable_base_id)
+        return None, None, None, None, None
+
+    registry = StreamRegistry("config/data_streams.yaml")
+    airtable_connector = AirtableConnector(airtable_api_key, airtable_base_id)
     data_processor = DataProcessor()
     technical_analysis = TechnicalAnalysis()
     visualizer = Visualizer()
-    
-    return airtable_service, data_processor, technical_analysis, visualizer
 
-airtable_service, data_processor, technical_analysis, visualizer = initialize_services()
+    return registry, airtable_connector, data_processor, technical_analysis, visualizer
+
+registry, airtable_connector, data_processor, technical_analysis, visualizer = initialize_services()
 
 # Check if services are initialized properly
-if not all([airtable_service, data_processor, technical_analysis, visualizer]):
+if not all([registry, airtable_connector, data_processor, technical_analysis, visualizer]):
     st.stop()
 
 # Sidebar for operations
@@ -52,39 +55,36 @@ operation = st.sidebar.radio(
     ["Load Data", "Find Negative Streaks", "Analyze Indicators", "Backtest Indicators"]
 )
 
+# Select data stream from registry
+approved = registry.approved_streams()
+stream_names = list(approved.keys())
+selected_stream = st.sidebar.selectbox("Select Data Stream", stream_names)
+
 # Main content based on operation
 if operation == "Load Data":
     st.header("Load Data from Airtable")
     
     with st.spinner("Fetching data from Airtable..."):
         try:
-            records = airtable_service.get_records_from_table("daily")
-            if not records:
-                st.warning("No records found in the 'daily' table.")
-                st.stop()
+            stream_cfg = registry.get(selected_stream)
+            df = airtable_connector.fetch(stream_cfg)
             
-            st.success(f"Successfully fetched {len(records)} records from Airtable!")
-            
-            # Process and display sample data
-            with st.spinner("Processing data..."):
-                df = data_processor.process_airtable_records(records, airtable_service)
-                
-                if df is not None and not df.empty:
+            if df is not None and not df.empty:
+                st.session_state['df'] = df
+                st.subheader("Sample Data")
+                st.dataframe(df.head())
+
+                # Calculate BTC_Daily_Change
+                if 'BTC_Close' in df.columns:
+                    df['BTC_Daily_Change'] = df['BTC_Close'].diff()
                     st.session_state['df'] = df
-                    st.subheader("Sample Data")
-                    st.dataframe(df.head())
-                    
-                    # Calculate BTC_Daily_Change
-                    if 'BTC_Close' in df.columns:
-                        df['BTC_Daily_Change'] = df['BTC_Close'].diff()
-                        st.session_state['df'] = df
-                        
-                        st.subheader("Bitcoin Daily Change")
-                        st.line_chart(df[['BTC_Daily_Change']].dropna())
-                    else:
-                        st.error("BTC_Close column not found in the data.")
+
+                    st.subheader("Bitcoin Daily Change")
+                    st.line_chart(df[['BTC_Daily_Change']].dropna())
                 else:
-                    st.error("Failed to process data from Airtable records.")
+                    st.error("BTC_Close column not found in the data.")
+            else:
+                st.error("Failed to process data from Airtable records.")
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
 
