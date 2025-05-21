@@ -1,0 +1,6 @@
+- name: btc_daily_prices
+  source: airtable
+  table: daily
+  description: "Bitcoin daily price data from Airtable attachments"
+  frequency: daily
+  approved: true
